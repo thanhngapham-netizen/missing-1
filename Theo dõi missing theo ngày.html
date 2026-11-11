@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Task Type IMIV đuôi 01 theo ngày</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f4f7fb;--card:#fff;--ink:#172033;--muted:#667085;--line:#e5eaf1;--blue:#2563eb}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Arial,Helvetica,sans-serif;color:var(--ink)}
+.wrap{max-width:1200px;margin:28px auto;padding:0 18px}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+h1{font-size:26px;margin:0 0 8px}.sub{color:var(--muted);font-size:14px}
+.panel,.kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:0 2px 8px #17203308}
+.upload{margin:20px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+input[type=file]{max-width:100%;padding:10px;border:1px dashed #9aa8ba;border-radius:10px;background:white}
+button{border:0;background:var(--blue);color:white;border-radius:9px;padding:10px 15px;font-weight:600;cursor:pointer}
+button.secondary{background:#eaf0ff;color:#1d4ed8}button:disabled{opacity:.45;cursor:not-allowed}
+.status{font-size:13px;color:var(--muted);margin-top:8px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}
+.kpi .label{color:var(--muted);font-size:13px}.kpi .value{font-size:28px;font-weight:700;margin-top:7px}
+.grid{display:grid;grid-template-columns:1fr;gap:16px;margin:16px 0}
+h2{font-size:18px;margin:0 0 14px}.chartbox{height:250px;max-width:100%;margin:0 auto;overflow-x:auto;overflow-y:hidden}.chartbox canvas{display:block}.chart-panel{padding:14px}.chart-panel h2{margin-bottom:8px}
+.tablewrap{overflow:auto;max-height:520px;border:1px solid var(--line);border-radius:10px}
+table{width:100%;border-collapse:collapse;background:white;font-size:13px;white-space:nowrap}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left}
+th{position:sticky;top:0;background:#f8fafc;z-index:1}td.num,th.num{text-align:right}
+.empty{padding:25px;text-align:center;color:var(--muted)}
+.note{font-size:12px;color:var(--muted);line-height:1.5;margin-top:10px}
+@media(max-width:600px){h1{font-size:21px}.chartbox{height:220px}.panel,.kpi{padding:13px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+ <div class="top">
+  <div><h1>Dashboard Task Type IMIV đuôi 01 theo ngày</h1>
+   <div class="sub">Thống kê số Task theo từng Task Type, chỉ lấy To Location có IMIV và kết thúc bằng 01.</div>
+  </div>
+ </div>
+ <div class="panel upload">
+  <div><strong>Chọn file Excel Rack Transfer Order</strong><br><span class="status">Mỗi ngày chọn file Excel mới để cập nhật số liệu.</span></div>
+  <input id="file" type="file" accept=".xlsx,.xls,.xlsm">
+  <button id="export" class="secondary" disabled>Xuất Excel tổng hợp</button>
+  <div id="status" class="status" style="width:100%">Chưa có file dữ liệu.</div>
+ </div>
+ <div class="kpis">
+  <div class="kpi"><div class="label">Tổng số Task IMIV-01</div><div class="value" id="totalTasks">—</div></div>
+  <div class="kpi"><div class="label">Số Task Type</div><div class="value" id="typeCount">—</div></div>
+  <div class="kpi"><div class="label">Số ngày phát sinh</div><div class="value" id="dayCount">—</div></div>
+  <div class="kpi"><div class="label">Tổng Actual Qty</div><div class="value" id="totalQty">—</div></div>
+ </div>
+ <div class="grid">
+  <section class="panel chart-panel"><h2>Số Task theo ngày và Task Type</h2><div class="chartbox"><canvas id="chart"></canvas></div><div class="note">Mỗi Task ID chỉ được đếm một lần. Ngày lấy theo Last Operate Time. Biểu đồ thể hiện số Task, không phải Actual Qty.</div></section>
+  <section class="panel"><h2>Bảng tổng hợp theo ngày và Task Type</h2><div id="summary" class="empty">Vui lòng chọn file Excel.</div></section>
+  <section class="panel"><h2>Chi tiết Task IMIV-01</h2><div id="details" class="empty">Vui lòng chọn file Excel.</div></section>
+ </div>
+</div>
+<script>
+let chart=null, summaryRows=[], detailRows=[], typeNames=[];
+const $=id=>document.getElementById(id);
+function norm(v){return String(v??'').trim().toLowerCase().replace(/\s+/g,' ')}
+function dateKey(v){
+ if(v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`;
+ if(typeof v==='number' && window.XLSX){const d=XLSX.SSF.parse_date_code(v);if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`}
+ if(v!==undefined && v!==null && v!==''){
+  const s=String(v).trim();
+  let m=s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  const d=new Date(s);if(!isNaN(d))return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+ }
+ return 'Không có ngày';
+}
+function fmtDate(k){if(k==='Không có ngày')return k;const [y,m,d]=k.split('-');return `${d}/${m}/${y}`}
+function num(v){const n=Number(v);return Number.isFinite(n)?n:0}
+function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function render(){
+ const dates=[...new Set(summaryRows.map(r=>r.date))].sort();
+ const total=detailRows.length, qty=detailRows.reduce((a,r)=>a+num(r['Actual Qty']),0);
+ $('totalTasks').textContent=total.toLocaleString('vi-VN');
+ $('typeCount').textContent=typeNames.length.toLocaleString('vi-VN');
+ $('dayCount').textContent=dates.filter(d=>d!=='Không có ngày').length.toLocaleString('vi-VN');
+ $('totalQty').textContent=qty.toLocaleString('vi-VN');
+ const barColor='#1D4ED8';
+ const datasets=typeNames.map(t=>({label:t,data:dates.map(d=>summaryRows.find(r=>r.date===d&&r.type===t)?.tasks||0),backgroundColor:barColor,borderColor:barColor,borderWidth:1}));
+ if(chart)chart.destroy();
+ const valueLabels={id:'valueLabels',afterDatasetsDraw(c){const {ctx}=c;ctx.save();ctx.font='bold 10px Arial';ctx.textAlign='center';ctx.textBaseline='bottom';c.data.datasets.forEach((ds,di)=>{const meta=c.getDatasetMeta(di);meta.data.forEach((bar,i)=>{const val=ds.data[i];if(val>0){ctx.fillStyle='#263247';ctx.fillText(String(val),bar.x,bar.y-3);}})});ctx.restore();}};
+ const canvas=$('chart');
+ const dayWidth=56;
+ canvas.width=Math.max(420,dates.length*dayWidth);
+ canvas.height=250;
+ canvas.style.width=canvas.width+'px';
+ canvas.style.height='250px';
+ chart=new Chart(canvas,{type:'bar',data:{labels:dates.map(fmtDate),datasets:datasets.map(ds=>({...ds,barPercentage:.52,categoryPercentage:.52,borderRadius:3,maxBarThickness:18}))},plugins:[valueLabels],options:{responsive:false,maintainAspectRatio:false,layout:{padding:{top:16,right:6,left:4,bottom:0}},plugins:{legend:{position:'bottom',labels:{boxWidth:10,boxHeight:10,padding:10,font:{size:10}}},tooltip:{mode:'index',intersect:false}},scales:{x:{stacked:false,ticks:{font:{size:10},maxRotation:0,autoSkip:false}},y:{beginAtZero:true,ticks:{precision:0,font:{size:10}},title:{display:true,text:'Số Task',font:{size:10}}}}}});
+ let head='<div class="tablewrap"><table><thead><tr><th>Ngày</th>'+typeNames.map(t=>`<th class="num">${escapeHtml(t)}</th>`).join('')+'<th class="num">Tổng Task</th></tr></thead><tbody>';
+ let body=dates.map(d=>{let vals=typeNames.map(t=>summaryRows.find(r=>r.date===d&&r.type===t)?.tasks||0);return `<tr><td>${fmtDate(d)}</td>${vals.map(v=>`<td class="num">${v}</td>`).join('')}<td class="num"><b>${vals.reduce((a,b)=>a+b,0)}</b></td></tr>`}).join('');
+ $('summary').innerHTML=head+body+'</tbody></table></div>';
+ const cols=['Task ID','Task Type','Task Status','Last Operate Time','Actual Qty','Operator','From Zone','To Zone','To Location'];
+ $('details').innerHTML='<div class="tablewrap"><table><thead><tr>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>'+detailRows.map(r=>'<tr>'+cols.map(c=>`<td>${escapeHtml(r[c]??'')}</td>`).join('')+'</tr>').join('')+'</tbody></table></div>';
+ $('export').disabled=false;
+}
+$('file').addEventListener('change',async e=>{
+ const file=e.target.files[0];if(!file)return;
+ $('status').textContent='Đang đọc file Excel...';
+ try{
+  if(!window.XLSX)throw new Error('Thư viện đọc Excel chưa tải được. Hãy kết nối Internet rồi mở lại dashboard.');
+  if(!window.Chart)throw new Error('Thư viện biểu đồ chưa tải được. Hãy kết nối Internet rồi mở lại dashboard.');
+  const data=await file.arrayBuffer(), wb=XLSX.read(data,{type:'array',cellDates:true});
+  let rows=[], selectedSheet='';
+  for(const sn of wb.SheetNames){const candidate=XLSX.utils.sheet_to_json(wb.Sheets[sn],{defval:'',raw:true});if(!candidate.length)continue;const candidateKeys=Object.keys(candidate[0]).map(norm);if(['task id','task type','to location','last operate time'].every(k=>candidateKeys.includes(k))){rows=candidate;selectedSheet=sn;break;}}
+  if(!rows.length)throw new Error('Không tìm thấy sheet có đủ 4 cột: Task ID, Task Type, To Location, Last Operate Time. Hãy kiểm tra hàng tiêu đề trong file Excel.');
+  const keys=Object.keys(rows[0]);const keyMap={};keys.forEach(k=>keyMap[norm(k)]=k);
+  const get=(r,k)=>r[keyMap[norm(k)]];
+  for(const k of ['Task ID','Task Type','To Location','Last Operate Time'])if(!keyMap[norm(k)])throw new Error('Không tìm thấy cột bắt buộc: '+k);
+  const filtered=rows.filter(r=>{const loc=norm(get(r,'To Location')).replace(/\s+/g,'');return /(^|[-_])imiv([-_]|$)/i.test(loc) && /(?:-|_)01$/i.test(loc) && String(get(r,'Task ID')??'').trim()!=='';});
+  const unique=new Map();filtered.forEach(r=>{const id=String(get(r,'Task ID')).trim();if(!unique.has(id))unique.set(id,r)});
+  detailRows=[...unique.values()].map(r=>{const o={};keys.forEach(k=>o[k]=r[k]);return o});
+  const group=new Map();
+  detailRows.forEach(r=>{const d=dateKey(get(r,'Last Operate Time')),t=String(get(r,'Task Type')||'Chưa phân loại').trim();const k=d+'||'+t;group.set(k,(group.get(k)||0)+1)});
+  summaryRows=[...group.entries()].map(([k,tasks])=>{const [date,type]=k.split('||');return {date,type,tasks}});
+  typeNames=[...new Set(summaryRows.map(r=>r.type))].sort((a,b)=>a.localeCompare(b,'vi'));
+  render();
+  $('status').textContent=`Đã cập nhật từ "${file.name}" (sheet ${selectedSheet}): đọc ${rows.length.toLocaleString('vi-VN')} dòng, lọc được ${detailRows.length.toLocaleString('vi-VN')} Task duy nhất có To Location chứa IMIV và kết thúc bằng 01.`;
+ }catch(err){$('status').textContent='Lỗi: '+err.message;detailRows=[];summaryRows=[];typeNames=[];$('totalTasks').textContent='—';$('typeCount').textContent='—';$('dayCount').textContent='—';$('totalQty').textContent='—';$('summary').textContent='Không thể tạo báo cáo.';$('details').textContent='Không có dữ liệu.';if(chart)chart.destroy();$('export').disabled=true}
+});
+$('export').addEventListener('click',()=>{
+ if(!detailRows.length)return;
+ const wb=XLSX.utils.book_new();
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summaryRows.map(r=>({Ngày:fmtDate(r.date),'Task Type':r.type,'Số Task':r.tasks}))), 'Tong hop');
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(detailRows), 'Chi tiet');
+ XLSX.writeFile(wb,'Tong_hop_Task_Type_IMIV_01.xlsx');
+});
+</script>
+</body></html>
